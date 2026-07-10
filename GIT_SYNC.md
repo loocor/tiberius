@@ -75,7 +75,7 @@ Rules:
 - Fork repository: `https://github.com/loocor/tiberius.git`
 - Upstream base: `a6b4fcdae0de5702427290b89f8d05bc51f3bcfa`
 - Integration branch: `xuntuo/sqlserver-2005`
-- Current validated commit: `78f3585c36f2ef3ea887c0f4c0ec1f1bde197a5f`
+- Initial validated code head: `78f3585c36f2ef3ea887c0f4c0ec1f1bde197a5f`
 
 Initial Xuntuo commits:
 
