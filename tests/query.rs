@@ -161,7 +161,7 @@ where
 
     conn.simple_query(format!(
         r#"
-        create or alter procedure {} 
+        create or alter procedure {}
           @Param1 varchar(50)
         as
             insert into ##{} (other)
