@@ -258,6 +258,7 @@ mod macros;
 
 mod client;
 mod from_sql;
+mod procedure;
 mod query;
 mod sql_read_bytes;
 mod to_sql;
@@ -272,6 +273,7 @@ mod sql_browser;
 pub use client::{AuthMethod, Client, Config};
 pub(crate) use error::Error;
 pub use from_sql::{FromSql, FromSqlOwned};
+pub use procedure::*;
 pub use query::Query;
 pub use result::*;
 pub use row::{Column, ColumnType, Row};
@@ -279,7 +281,7 @@ pub use sql_browser::SqlBrowser;
 pub use tds::{
     codec::{BulkLoadRequest, ColumnData, ColumnFlag, IntoRow, TokenRow, TypeLength},
     numeric,
-    stream::QueryStream,
+    stream::{OutputParameter, ProcedureItem, ProcedureStream, QueryStream},
     time, xml, EncryptionLevel,
 };
 pub use to_sql::{IntoSql, ToSql};

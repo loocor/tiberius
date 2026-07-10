@@ -4,14 +4,29 @@ use futures_util::io::{AsyncRead, AsyncWrite};
 
 use crate::{
     tds::{codec::RpcProcId, stream::TokenStream},
-    Client, ColumnData, ExecuteResult, IntoSql, QueryStream,
+    Client, ColumnData, ExecuteResult, IntoSql, ProcedureType, QueryStream,
 };
 
 /// A query object with bind parameters.
 #[derive(Debug)]
 pub struct Query<'a> {
     sql: Cow<'a, str>,
-    params: Vec<ColumnData<'a>>,
+    params: Vec<QueryParameter<'a>>,
+}
+
+#[derive(Debug)]
+pub(crate) struct QueryParameter<'a> {
+    pub(crate) value: ColumnData<'a>,
+    pub(crate) sql_type: Option<ProcedureType>,
+}
+
+impl<'a> QueryParameter<'a> {
+    pub(crate) fn inferred(value: ColumnData<'a>) -> Self {
+        Self {
+            value,
+            sql_type: None,
+        }
+    }
 }
 
 impl<'a> Query<'a> {
@@ -32,7 +47,20 @@ impl<'a> Query<'a> {
     /// as there are parameters in the given SQL. Otherwise the query will fail
     /// on execution.
     pub fn bind(&mut self, param: impl IntoSql<'a> + 'a) {
-        self.params.push(param.into_sql());
+        self.params.push(QueryParameter::inferred(param.into_sql()));
+    }
+
+    /// Bind a value that has already been encoded for a specific SQL type.
+    pub fn bind_value(&mut self, param: ColumnData<'a>) {
+        self.params.push(QueryParameter::inferred(param));
+    }
+
+    /// Bind a preencoded value with an explicit SQL declaration type.
+    pub fn bind_typed_value(&mut self, param: ColumnData<'a>, sql_type: ProcedureType) {
+        self.params.push(QueryParameter {
+            value: param,
+            sql_type: Some(sql_type),
+        });
     }
 
     /// Executes SQL statements in the SQL Server, returning the number rows

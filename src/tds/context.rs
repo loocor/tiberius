@@ -1,4 +1,5 @@
 use super::codec::*;
+use super::Collation;
 use std::sync::Arc;
 
 /// Context, that might be required to make sure we understand and are understood by the server
@@ -10,6 +11,7 @@ pub(crate) struct Context {
     transaction_desc: [u8; 8],
     last_meta: Option<Arc<TokenColMetaData<'static>>>,
     spn: Option<String>,
+    collation: Option<Collation>,
 }
 
 impl Context {
@@ -21,6 +23,7 @@ impl Context {
             transaction_desc: [0; 8],
             last_meta: None,
             spn: None,
+            collation: None,
         }
     }
 
@@ -56,6 +59,18 @@ impl Context {
 
     pub fn version(&self) -> FeatureLevel {
         self.version
+    }
+
+    pub fn set_version(&mut self, version: FeatureLevel) {
+        self.version = version;
+    }
+
+    pub fn collation(&self) -> Option<Collation> {
+        self.collation
+    }
+
+    pub fn set_collation(&mut self, collation: Option<Collation>) {
+        self.collation = collation;
     }
 
     pub fn set_spn(&mut self, host: impl AsRef<str>, port: u16) {

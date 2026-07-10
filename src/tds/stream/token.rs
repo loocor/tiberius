@@ -181,6 +181,9 @@ where
             | TokenEnvChange::DefectTransaction => {
                 self.conn.context_mut().set_transaction_descriptor([0; 8]);
             }
+            TokenEnvChange::SqlCollation { new, .. } => {
+                self.conn.context_mut().set_collation(new);
+            }
             _ => (),
         }
 
@@ -247,12 +250,28 @@ where
                 TokenType::LoginAck => this.get_login_ack().await?,
                 TokenType::Sspi => this.get_sspi().await?,
                 TokenType::FeatureExtAck => this.get_feature_ext_ack().await?,
-                _ => panic!("Token {:?} unimplemented!", ty),
+                _ => return Err(unsupported_token_error(ty)),
             };
 
             Ok(Some((token, this)))
         });
 
         Box::pin(stream)
+    }
+}
+
+fn unsupported_token_error(ty: TokenType) -> Error {
+    Error::Protocol(format!("token {ty:?} is not supported").into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsupported_known_token_is_a_protocol_error() {
+        let error = unsupported_token_error(TokenType::ColInfo);
+
+        assert!(matches!(error, Error::Protocol(_)));
     }
 }

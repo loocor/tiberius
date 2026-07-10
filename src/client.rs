@@ -16,12 +16,13 @@ pub(crate) use connection::*;
 
 use crate::tds::stream::ReceivedToken;
 use crate::{
+    query::QueryParameter,
     result::ExecuteResult,
     tds::{
         codec::{self, IteratorJoin},
-        stream::{QueryStream, TokenStream},
+        stream::{ProcedureStream, QueryStream, TokenStream},
     },
-    BulkLoadRequest, ColumnFlag, SqlReadBytes, ToSql,
+    BulkLoadRequest, ColumnFlag, ProcedureParameter, ProcedureType, SqlReadBytes, ToSql,
 };
 use codec::{BatchRequest, ColumnData, PacketHeader, RpcParam, RpcProcId, TokenRpcRequest};
 use enumflags2::BitFlags;
@@ -64,6 +65,15 @@ pub struct Client<S: AsyncRead + AsyncWrite + Unpin + Send> {
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
+    /// Whether the current server response has been consumed completely.
+    ///
+    /// A connection that is not idle must not be returned to a connection
+    /// pool after cancellation because the next request would observe the
+    /// remaining TDS response packets.
+    pub fn is_connection_idle(&self) -> bool {
+        self.connection.is_eof()
+    }
+
     /// Uses an instance of [`Config`] to specify the connection
     /// options required to connect to the database using an established
     /// tcp connection
@@ -126,7 +136,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         self.connection.flush_stream().await?;
         let rpc_params = Self::rpc_params(query);
 
-        let params = params.iter().map(|s| s.to_sql());
+        let params = params.iter().map(|s| QueryParameter::inferred(s.to_sql()));
         self.rpc_perform_query(RpcProcId::ExecuteSQL, rpc_params, params)
             .await?;
 
@@ -188,7 +198,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         self.connection.flush_stream().await?;
         let rpc_params = Self::rpc_params(query);
 
-        let params = params.iter().map(|p| p.to_sql());
+        let params = params.iter().map(|p| QueryParameter::inferred(p.to_sql()));
         self.rpc_perform_query(RpcProcId::ExecuteSQL, rpc_params, params)
             .await?;
 
@@ -197,6 +207,37 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         result.forward_to_metadata().await?;
 
         Ok(result)
+    }
+
+    /// Executes a named stored procedure and preserves RPC return tokens.
+    pub async fn execute_procedure<'a, 'b>(
+        &'a mut self,
+        procedure: impl Into<Cow<'b, str>>,
+        parameters: Vec<ProcedureParameter<'b>>,
+    ) -> crate::Result<ProcedureStream<'a>>
+    where
+        'a: 'b,
+    {
+        self.connection.flush_stream().await?;
+        let collation = self.connection.context().collation();
+        let parameters = parameters
+            .into_iter()
+            .map(ProcedureParameter::into_rpc_param)
+            .map(|mut parameter| {
+                parameter.apply_default_collation(collation);
+                parameter
+            })
+            .collect();
+        let request = TokenRpcRequest::new(
+            procedure,
+            parameters,
+            self.connection.context().transaction_descriptor(),
+        );
+        let id = self.connection.context_mut().next_packet_id();
+        self.connection.send(PacketHeader::rpc(id), request).await?;
+
+        let stream = TokenStream::new(&mut self.connection);
+        Ok(ProcedureStream::new(stream.try_unfold()))
     }
 
     /// Execute multiple queries, delimited with `;` and return multiple result
@@ -358,11 +399,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
                 name: Cow::Borrowed("stmt"),
                 flags: BitFlags::empty(),
                 value: ColumnData::String(Some(query.into())),
+                type_info: None,
             },
             RpcParam {
                 name: Cow::Borrowed("params"),
                 flags: BitFlags::empty(),
                 value: ColumnData::I32(Some(0)),
+                type_info: None,
             },
         ]
     }
@@ -371,7 +414,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         &'a mut self,
         proc_id: RpcProcId,
         mut rpc_params: Vec<RpcParam<'b>>,
-        params: impl Iterator<Item = ColumnData<'b>>,
+        params: impl Iterator<Item = QueryParameter<'b>>,
     ) -> crate::Result<()>
     where
         'a: 'b,
@@ -383,13 +426,20 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
                 param_str.push(',')
             }
             param_str.push_str(&format!("@P{} ", i + 1));
-            param_str.push_str(&param.type_name());
+            let sql_type = param.sql_type;
+            let declaration = sql_type
+                .map(ProcedureType::sql_declaration)
+                .unwrap_or_else(|| param.value.type_name());
+            param_str.push_str(&declaration);
 
-            rpc_params.push(RpcParam {
+            let mut rpc_param = RpcParam {
                 name: Cow::Owned(format!("@P{}", i + 1)),
                 flags: BitFlags::empty(),
-                value: param,
-            });
+                value: param.value,
+                type_info: sql_type.map(ProcedureType::type_info),
+            };
+            rpc_param.apply_default_collation(self.connection.context().collation());
+            rpc_params.push(rpc_param);
         }
 
         if let Some(params) = rpc_params.iter_mut().find(|x| x.name == "params") {

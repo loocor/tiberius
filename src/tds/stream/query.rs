@@ -368,6 +368,7 @@ impl<'a> Stream for QueryStream<'a> {
                         .map(|x| Column {
                             name: x.col_name.to_string(),
                             column_type: ColumnType::from(&x.base.ty),
+                            flags: x.base.flags,
                         })
                         .collect::<Vec<_>>();
 
