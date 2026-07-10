@@ -32,7 +32,7 @@ impl Numeric {
     pub fn new_with_scale(value: i128, scale: u8) -> Self {
         // scale cannot exceed 37 since a
         // max precision of 38 is possible here.
-        assert!(scale < 38);
+        assert!(scale <= 38);
 
         Numeric { value, scale }
     }

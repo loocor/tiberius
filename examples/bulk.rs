@@ -31,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
         .execute(
             r#"CREATE TABLE bulk_test1 (
                         id INT IDENTITY PRIMARY KEY,
-                        int int NULL, 
+                        int int NULL,
                         float real NULL,
                         string varchar(40) NULL)"#,
             &[],

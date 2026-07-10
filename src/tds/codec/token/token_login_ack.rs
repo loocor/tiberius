@@ -26,6 +26,7 @@ impl TokenLoginAck {
 
         let tds_version = FeatureLevel::try_from(src.read_u32().await?)
             .map_err(|_| Error::Protocol("Login ACK: Invalid TDS version".into()))?;
+        src.context_mut().set_version(tds_version);
 
         let prog_name = src.read_b_varchar().await?;
         let version = src.read_u32_le().await?;
@@ -36,5 +37,30 @@ impl TokenLoginAck {
             prog_name,
             version,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TokenLoginAck;
+    use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
+    use crate::{FeatureLevel, SqlReadBytes};
+    use bytes::{BufMut, BytesMut};
+
+    #[tokio::test]
+    async fn negotiated_tds_version_updates_connection_context() {
+        let mut bytes = BytesMut::new();
+        bytes.put_u16_le(10);
+        bytes.put_u8(1);
+        bytes.put_u32(FeatureLevel::SqlServer2005 as u32);
+        bytes.put_u8(0);
+        bytes.put_u32_le(0);
+        let mut reader = bytes.into_sql_read_bytes();
+
+        TokenLoginAck::decode(&mut reader)
+            .await
+            .expect("decode login acknowledgement");
+
+        assert_eq!(reader.context().version(), FeatureLevel::SqlServer2005);
     }
 }

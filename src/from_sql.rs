@@ -63,7 +63,10 @@ from_sql!(i16: ColumnData::I16(val) => (*val, val), ColumnData::U8(None) => (Non
 from_sql!(i32: ColumnData::I32(val) => (*val, val), ColumnData::U8(None) => (None, None));
 from_sql!(i64: ColumnData::I64(val) => (*val, val), ColumnData::U8(None) => (None, None), ColumnData::I32(None) => (None, None));
 from_sql!(f32: ColumnData::F32(val) => (*val, val));
-from_sql!(f64: ColumnData::F64(val) => (*val, val));
+from_sql!(f64:
+    ColumnData::F64(val) => (*val, val),
+    ColumnData::Numeric(val) => (val.map(f64::from), val.map(f64::from))
+);
 from_sql!(Uuid: ColumnData::Guid(val) => (*val, val));
 from_sql!(Numeric: ColumnData::Numeric(n) => (*n, n));
 

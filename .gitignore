@@ -3,3 +3,6 @@ Cargo.lock
 .idea
 .direnv/
 .vscode
+.envrc
+docker/
+docker-compose.yml

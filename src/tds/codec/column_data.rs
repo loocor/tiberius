@@ -133,7 +133,11 @@ impl<'a> ColumnData<'a> {
                 VarLenType::Decimaln | VarLenType::Numericn => {
                     ColumnData::Numeric(Numeric::decode(src, *scale).await?)
                 }
-                _ => todo!(),
+                ty => {
+                    return Err(crate::Error::Protocol(
+                        format!("decoding precision value for {ty:?} is not supported").into(),
+                    ));
+                }
             },
             TypeInfo::Xml { schema, size } => xml::decode(src, *size, schema.clone()).await?,
         };
@@ -301,7 +305,10 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                     || vlc.r#type() == VarLenType::BigVarChar =>
             {
                 if let Some(str) = opt {
-                    let mut encoder = vlc.collation().as_ref().unwrap().encoding()?.new_encoder();
+                    let collation = vlc.collation().ok_or_else(|| {
+                        crate::Error::Encoding("varchar type information has no collation".into())
+                    })?;
+                    let mut encoder = collation.encoding()?.new_encoder();
                     let len = encoder
                         .max_buffer_length_from_utf8_without_replacement(str.len())
                         .unwrap();
@@ -668,12 +675,23 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
             {
                 if let Some(num) = opt {
                     if scale != &num.scale() {
-                        todo!("this still need some work, if client scale not aligned with server, we need to do conversion but will lose precision")
+                        return Err(crate::Error::BulkInput(
+                            format!(
+                                "numeric scale mismatch: server expects {scale}, value uses {}",
+                                num.scale()
+                            )
+                            .into(),
+                        ));
                     }
                     num.encode(&mut *dst)?;
                 } else {
                     dst.put_u8(0);
                 }
+            }
+            (ColumnData::Numeric(opt), Some(TypeInfo::VarLenSized(vlc)))
+                if vlc.r#type() == VarLenType::Money =>
+            {
+                money::encode(&mut *dst, opt, vlc.len())?;
             }
             (ColumnData::Numeric(Some(num)), None) => {
                 let headers = &[
@@ -966,6 +984,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn money_with_varlen_money() {
+        test_round_trip(
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Money, 8, None)),
+            ColumnData::Numeric(Some(Numeric::new_with_scale(9_223_372_036_854_775, 4))),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn smallmoney_with_varlen_money() {
+        test_round_trip(
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Money, 4, None)),
+            ColumnData::Numeric(Some(Numeric::new_with_scale(12345, 4))),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn none_money_with_varlen_money() {
+        test_round_trip(
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Money, 8, None)),
+            ColumnData::Numeric(None),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn mismatched_numeric_scale_returns_an_error() {
+        let type_info = TypeInfo::VarLenSizedPrecision {
+            ty: VarLenType::Numericn,
+            size: 9,
+            precision: 10,
+            scale: 2,
+        };
+        let value = ColumnData::Numeric(Some(Numeric::new_with_scale(12345, 3)));
+        let mut raw = BytesMut::new();
+        let mut bytes = BytesMutWithTypeInfo::new(&mut raw).with_type_info(&type_info);
+
+        let error = value.encode(&mut bytes).expect_err("scale mismatch");
+
+        assert!(matches!(error, Error::BulkInput(_)));
+    }
+
+    #[tokio::test]
     async fn string_with_varlen_bigchar() {
         test_round_trip(
             TypeInfo::VarLenSized(VarLenContext::new(
@@ -1028,6 +1090,46 @@ mod tests {
             ColumnData::String(Some("aaa".into())),
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn simplified_chinese_varchar_round_trips_with_gb18030_collation() {
+        test_round_trip(
+            TypeInfo::VarLenSized(VarLenContext::new(
+                VarLenType::BigVarChar,
+                40,
+                Some(Collation::new(0x0804, 0)),
+            )),
+            ColumnData::String(Some("海景房源".into())),
+        )
+        .await;
+    }
+
+    #[test]
+    fn varchar_without_collation_returns_an_encoding_error() {
+        let type_info = TypeInfo::VarLenSized(VarLenContext::new(VarLenType::BigVarChar, 40, None));
+        let value = ColumnData::String(Some("text".into()));
+        let mut raw = BytesMut::new();
+        let mut bytes = BytesMutWithTypeInfo::new(&mut raw).with_type_info(&type_info);
+
+        let error = value.encode(&mut bytes).expect_err("missing collation");
+
+        assert!(matches!(error, Error::Encoding(_)));
+    }
+
+    #[tokio::test]
+    async fn varchar_decode_without_collation_returns_an_encoding_error() {
+        let type_info = TypeInfo::VarLenSized(VarLenContext::new(VarLenType::BigVarChar, 40, None));
+        let mut bytes = BytesMut::new();
+        bytes.put_u16_le(4);
+        bytes.extend_from_slice(b"text");
+        let reader = &mut bytes.into_sql_read_bytes();
+
+        let error = ColumnData::decode(reader, &type_info)
+            .await
+            .expect_err("missing collation");
+
+        assert!(matches!(error, Error::Encoding(_)));
     }
 
     #[tokio::test]

@@ -1,8 +1,9 @@
 use crate::{
     error::Error,
     tds::codec::{ColumnData, FixedLenType, TokenRow, TypeInfo, VarLenType},
-    FromSql,
+    ColumnFlag, FromSql,
 };
+use enumflags2::BitFlags;
 use std::{fmt::Display, sync::Arc};
 
 /// A column of data from a query.
@@ -10,12 +11,17 @@ use std::{fmt::Display, sync::Arc};
 pub struct Column {
     pub(crate) name: String,
     pub(crate) column_type: ColumnType,
+    pub(crate) flags: BitFlags<ColumnFlag>,
 }
 
 impl Column {
     /// Construct a new Column.
     pub fn new(name: String, column_type: ColumnType) -> Self {
-        Self { name, column_type }
+        Self {
+            name,
+            column_type,
+            flags: ColumnFlag::NullableUnknown.into(),
+        }
     }
 
     /// The name of the column.
@@ -26,6 +32,25 @@ impl Column {
     /// The type of the column.
     pub fn column_type(&self) -> ColumnType {
         self.column_type
+    }
+
+    /// Whether the server reports this column as nullable.
+    pub fn nullable(&self) -> Option<bool> {
+        if self.flags.contains(ColumnFlag::NullableUnknown) {
+            None
+        } else {
+            Some(self.flags.contains(ColumnFlag::Nullable))
+        }
+    }
+
+    /// Whether the server reports this column as an identity.
+    pub fn is_identity(&self) -> bool {
+        self.flags.contains(ColumnFlag::Identity)
+    }
+
+    /// Whether the server reports this column as computed.
+    pub fn is_computed(&self) -> bool {
+        self.flags.contains(ColumnFlag::Computed)
     }
 }
 

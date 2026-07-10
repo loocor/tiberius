@@ -62,17 +62,19 @@ impl PreloginMessage {
         feature = "native-tls",
         feature = "vendored-openssl"
     ))]
-    pub fn negotiated_encryption(&self, expected: EncryptionLevel) -> EncryptionLevel {
+    pub fn negotiated_encryption(&self, expected: EncryptionLevel) -> Result<EncryptionLevel> {
         match (expected, self.encryption) {
             (EncryptionLevel::NotSupported, EncryptionLevel::NotSupported) => {
-                EncryptionLevel::NotSupported
+                Ok(EncryptionLevel::NotSupported)
             }
-            (EncryptionLevel::Off, EncryptionLevel::Off) => EncryptionLevel::Off,
+            (EncryptionLevel::Off, EncryptionLevel::Off) => Ok(EncryptionLevel::Off),
             (EncryptionLevel::On, EncryptionLevel::Off)
-            | (EncryptionLevel::On, EncryptionLevel::NotSupported) => {
-                panic!("Server does not allow the requested encryption level.")
-            }
-            (_, _) => EncryptionLevel::On,
+            | (EncryptionLevel::On, EncryptionLevel::NotSupported)
+            | (EncryptionLevel::Required, EncryptionLevel::Off)
+            | (EncryptionLevel::Required, EncryptionLevel::NotSupported) => Err(Error::Protocol(
+                "server does not allow the requested encryption level".into(),
+            )),
+            (_, _) => Ok(EncryptionLevel::On),
         }
     }
 
@@ -81,8 +83,8 @@ impl PreloginMessage {
         feature = "native-tls",
         feature = "vendored-openssl"
     )))]
-    pub fn negotiated_encryption(&self, _: EncryptionLevel) -> EncryptionLevel {
-        EncryptionLevel::NotSupported
+    pub fn negotiated_encryption(&self, _: EncryptionLevel) -> Result<EncryptionLevel> {
+        Ok(EncryptionLevel::NotSupported)
     }
 }
 
@@ -281,5 +283,39 @@ mod tests {
         let decoded = PreloginMessage::decode(&mut payload).expect("decode should succeed");
 
         assert_eq!(prelogin, decoded);
+    }
+
+    #[cfg(any(
+        feature = "rustls",
+        feature = "native-tls",
+        feature = "vendored-openssl"
+    ))]
+    #[test]
+    fn requested_encryption_rejection_is_a_protocol_error() {
+        let mut prelogin = PreloginMessage::new();
+        prelogin.encryption = EncryptionLevel::Off;
+
+        let error = prelogin
+            .negotiated_encryption(EncryptionLevel::On)
+            .expect_err("server rejection must be reported");
+
+        assert!(matches!(error, Error::Protocol(_)));
+    }
+
+    #[cfg(any(
+        feature = "rustls",
+        feature = "native-tls",
+        feature = "vendored-openssl"
+    ))]
+    #[test]
+    fn required_encryption_rejection_is_a_protocol_error() {
+        let mut prelogin = PreloginMessage::new();
+        prelogin.encryption = EncryptionLevel::NotSupported;
+
+        let error = prelogin
+            .negotiated_encryption(EncryptionLevel::Required)
+            .expect_err("required encryption must fail closed");
+
+        assert!(matches!(error, Error::Protocol(_)));
     }
 }

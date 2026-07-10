@@ -20,7 +20,9 @@ where
     match (data, ty) {
         // Codepages other than UTF
         (Some(buf), BigChar) | (Some(buf), BigVarChar) => {
-            let collation = collation.as_ref().unwrap();
+            let collation = collation.as_ref().ok_or_else(|| {
+                Error::Encoding("varchar value is missing collation metadata".into())
+            })?;
             let encoder = collation.encoding()?;
 
             let s = encoder

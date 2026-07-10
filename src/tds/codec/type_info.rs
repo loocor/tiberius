@@ -99,12 +99,29 @@ impl Encode<BytesMut> for VarLenContext {
                 dst.put_u32_le(self.len() as u32);
             }
             VarLenType::Xml => (),
-            typ => todo!("encoding {:?} is not supported yet", typ),
+            typ => {
+                return Err(Error::Protocol(
+                    format!("encoding type information for {typ:?} is not supported").into(),
+                ));
+            }
         }
 
-        if let Some(collation) = self.collation() {
-            dst.put_u32_le(collation.info());
-            dst.put_u8(collation.sort_id());
+        let requires_collation = matches!(
+            self.r#type,
+            VarLenType::NText
+                | VarLenType::Text
+                | VarLenType::BigChar
+                | VarLenType::NChar
+                | VarLenType::NVarchar
+                | VarLenType::BigVarChar
+        );
+        if requires_collation {
+            if let Some(collation) = self.collation() {
+                dst.put_u32_le(collation.info());
+                dst.put_u8(collation.sort_id());
+            } else {
+                dst.extend_from_slice(&[0; 5]);
+            }
         }
 
         Ok(())
@@ -257,6 +274,28 @@ impl Encode<BytesMut> for TypeInfo {
 }
 
 impl TypeInfo {
+    pub(crate) fn apply_default_collation(&mut self, collation: Option<Collation>) {
+        let Some(collation) = collation else {
+            return;
+        };
+        let TypeInfo::VarLenSized(context) = self else {
+            return;
+        };
+        if context.collation().is_none()
+            && matches!(
+                context.r#type(),
+                VarLenType::NText
+                    | VarLenType::Text
+                    | VarLenType::BigChar
+                    | VarLenType::NChar
+                    | VarLenType::NVarchar
+                    | VarLenType::BigVarChar
+            )
+        {
+            *context = VarLenContext::new(context.r#type(), context.len(), Some(collation));
+        }
+    }
+
     pub(crate) async fn decode<R>(src: &mut R) -> crate::Result<Self>
     where
         R: SqlReadBytes + Unpin,
@@ -314,7 +353,11 @@ impl TypeInfo {
                     VarLenType::Image | VarLenType::Text | VarLenType::NText => {
                         src.read_u32_le().await? as usize
                     }
-                    _ => todo!("not yet implemented for {:?}", ty),
+                    _ => {
+                        return Err(Error::Protocol(
+                            format!("decoding type information for {ty:?} is not supported").into(),
+                        ));
+                    }
                 };
 
                 let collation = match ty {
@@ -395,5 +438,26 @@ mod tests {
 
             assert_eq!(nti, ti)
         }
+    }
+
+    #[test]
+    fn unsupported_varlen_type_returns_an_encoding_error() {
+        let context = VarLenContext::new(VarLenType::Udt, 16, None);
+        let mut bytes = BytesMut::new();
+
+        let error = context.encode(&mut bytes).expect_err("unsupported UDT");
+
+        assert!(matches!(error, Error::Protocol(_)));
+    }
+
+    #[tokio::test]
+    async fn unsupported_varlen_type_returns_a_decoding_error() {
+        let mut bytes = BytesMut::from(&[VarLenType::Udt as u8][..]).into_sql_read_bytes();
+
+        let error = TypeInfo::decode(&mut bytes)
+            .await
+            .expect_err("unsupported UDT");
+
+        assert!(matches!(error, Error::Protocol(_)));
     }
 }

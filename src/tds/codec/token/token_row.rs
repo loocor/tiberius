@@ -100,7 +100,10 @@ impl TokenRow<'static> {
     where
         R: SqlReadBytes + Unpin,
     {
-        let col_meta = src.context().last_meta().unwrap();
+        let col_meta = src
+            .context()
+            .last_meta()
+            .ok_or_else(|| crate::Error::Protocol("row token is missing column metadata".into()))?;
 
         let mut row = Self {
             data: Vec::with_capacity(col_meta.columns.len()),
@@ -120,7 +123,9 @@ impl TokenRow<'static> {
     where
         R: SqlReadBytes + Unpin,
     {
-        let col_meta = src.context().last_meta().unwrap();
+        let col_meta = src.context().last_meta().ok_or_else(|| {
+            crate::Error::Protocol("NBC row token is missing column metadata".into())
+        })?;
         let row_bitmap = RowBitmap::decode(src, col_meta.columns.len()).await?;
 
         let mut row = Self {
@@ -188,8 +193,31 @@ impl RowBitmap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
     use crate::{BaseMetaDataColumn, ColumnFlag, FixedLenType, MetaDataColumn, TypeInfo};
     use bytes::BytesMut;
+
+    #[tokio::test]
+    async fn row_without_column_metadata_returns_a_protocol_error() {
+        let mut reader = BytesMut::new().into_sql_read_bytes();
+
+        let error = TokenRow::decode(&mut reader)
+            .await
+            .expect_err("row metadata is required");
+
+        assert!(matches!(error, crate::Error::Protocol(_)));
+    }
+
+    #[tokio::test]
+    async fn nbc_row_without_column_metadata_returns_a_protocol_error() {
+        let mut reader = BytesMut::new().into_sql_read_bytes();
+
+        let error = TokenRow::decode_nbc(&mut reader)
+            .await
+            .expect_err("NBC row metadata is required");
+
+        assert!(matches!(error, crate::Error::Protocol(_)));
+    }
 
     #[tokio::test]
     async fn wrong_number_of_columns_will_fail() {
